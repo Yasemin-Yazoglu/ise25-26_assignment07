@@ -1,7 +1,11 @@
 package de.seuhd.campuscoffee.domain.implementation;
 
 import de.seuhd.campuscoffee.domain.configuration.ApprovalConfiguration;
+import de.seuhd.campuscoffee.domain.exceptions.NotFoundException;
+import de.seuhd.campuscoffee.domain.exceptions.ValidationException;
+import de.seuhd.campuscoffee.domain.model.objects.Pos;
 import de.seuhd.campuscoffee.domain.model.objects.Review;
+import de.seuhd.campuscoffee.domain.model.objects.User;
 import de.seuhd.campuscoffee.domain.ports.api.ReviewService;
 import de.seuhd.campuscoffee.domain.ports.data.CrudDataService;
 import de.seuhd.campuscoffee.domain.ports.data.PosDataService;
@@ -9,9 +13,13 @@ import de.seuhd.campuscoffee.domain.ports.data.ReviewDataService;
 import de.seuhd.campuscoffee.domain.ports.data.UserDataService;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.nio.file.NotDirectoryException;
 import java.util.List;
 
 /**
@@ -46,8 +54,28 @@ public class ReviewServiceImpl extends CrudServiceImpl<Review, Long> implements 
     @Transactional
     public @NonNull Review upsert(@NonNull Review review) {
         // TODO: Implement the missing business logic here
+        // Check if POS exists
+        Long posId = review.pos().getId();
+        if(posId == null) {
+            throw new ValidationException("POS does not exist");
+        }
+        posDataService.getById(posId);
 
-        return super.upsert(review);
+        // Check if user exists
+        Long userId = review.author().getId();
+        if(userId == null) {
+            throw new ValidationException("User does not exist");
+        }
+        userDataService.getById(userId);
+
+        // Check if the user already reviewed the POS
+        List<Review> UserPosReviews = reviewDataService.filter(review.pos(), review.author());
+        if(UserPosReviews.isEmpty()) {
+            return super.upsert(review);
+        }
+        else {
+            throw new ValidationException("User cannot write multiple reviews for the same POS.");
+        }
     }
 
     @Override
@@ -64,20 +92,37 @@ public class ReviewServiceImpl extends CrudServiceImpl<Review, Long> implements 
 
         // validate that the user exists
         // TODO: Implement the required business logic here
+        userDataService.getById(userId);
 
         // validate that the review exists
         // TODO: Implement the required business logic here
+        if(review.id() == null) {
+            throw new ValidationException("Review does not exist");
+        }
+        try {
+            reviewDataService.getById(review.getId());
+        }
+        catch (NotFoundException nfe) {
+            throw new ValidationException("Review does not exist");
+        }
 
         // a user cannot approve their own review
         // TODO: Implement the required business logic here
+        if(userId.equals(review.author().getId())) {
+            throw  new ValidationException("User cannot approve their own review.");
+        }
 
         // increment approval count
         // TODO: Implement the required business logic here
+        Review updated = review.toBuilder()
+                .approvalCount(review.approvalCount() + 1)
+                .build();
 
         // update approval status to determine if the review now reaches the approval quorum
         // TODO: Implement the required business logic here
+        updated = updateApprovalStatus(updated);
 
-        return reviewDataService.upsert(review);
+        return reviewDataService.upsert(updated);
     }
 
     /**
